@@ -4,29 +4,33 @@
 ![GitHub issues](https://img.shields.io/github/issues/Zer0G0ld/ZoneMonitor)
 ![GitHub license](https://img.shields.io/github/license/Zer0G0ld/ZoneMonitor)
 
-**ZoneMonitor** é um agente SNMP baseado em ESP8266 que monitora temperatura e umidade usando sensores DHT22.  
-Permite consultar os valores via SNMP v2c, sendo ideal para projetos de IoT, automação e monitoramento remoto.
+**ZoneMonitor** é um agente SNMP baseado em ESP8266 que monitora temperatura e umidade usando sensores DHT11/DHT22.
+Permite consultar os valores via SNMP v2c e exibir um dashboard web moderno, sendo ideal para projetos de IoT, automação e monitoramento remoto.
 
 ---
 
 ## Funcionalidades
 
-- Conecta o ESP8266 a uma rede Wi-Fi.
-- Lê temperatura e umidade de um sensor DHT22.
-- Responde a requisições SNMP v2c para OIDs configuráveis:
-  - `1.3.6.1.4.1.4976.1.1.0` → Temperatura
-  - `1.3.6.1.4.1.4976.1.2.0` → Umidade
-- Permite integração com ferramentas de monitoramento (Zabbix, PRTG, etc.).
-- Código modular e facilmente extensível para novos sensores e OIDs.
+* Conecta o ESP8266 a uma rede Wi-Fi.
+* Lê temperatura e umidade de um sensor DHT11 ou DHT22.
+* Exibe IP, MAC, temperatura e umidade em um **OLED 128x64**.
+* Dashboard web moderno com atualização em tempo real (a cada 2s), mostrando temperatura, umidade e status online.
+* Responde a requisições SNMP v2c para OIDs configuráveis:
+
+  * `1.3.6.1.4.1.4976.1.1.0` → Temperatura
+  * `1.3.6.1.4.1.4976.1.2.0` → Umidade
+* Permite integração com ferramentas de monitoramento (Zabbix, PRTG, TheDude etc.).
+* Código modular, leve e extensível para novos sensores e OIDs.
 
 ---
 
 ## Materiais necessários
 
-- ESP8266 (NodeMCU, Wemos D1 Mini, etc.)
-- Sensor DHT22
-- Cabos de conexão
-- Arduino IDE (ou PlatformIO)
+* ESP8266 (NodeMCU, Wemos D1 Mini, etc.)
+* Sensor DHT11 ou DHT22
+* OLED 128x64 I²C (opcional, mas recomendado)
+* Cabos de conexão
+* Arduino IDE (ou PlatformIO)
 
 ---
 
@@ -35,16 +39,19 @@ Permite consultar os valores via SNMP v2c, sendo ideal para projetos de IoT, aut
 1. Clone o repositório:
 
 ```bash
-git clone https://github.com/SEU_USUARIO/ZoneMonitor.git
+git clone https://github.com/Zer0G0ld/ZoneMonitor.git
 cd ZoneMonitor
-````
+```
 
 2. Abra o projeto na Arduino IDE.
 3. Instale as bibliotecas necessárias:
 
-   * [ESP8266WiFi](https://github.com/esp8266/Arduino)
-   * [SNMP](https://github.com/your/snmp-library)
-   * [DHT sensor library](https://github.com/adafruit/DHT-sensor-library)
+* [ESP8266WiFi](https://github.com/esp8266/Arduino)
+* [SNMP](https://github.com/your/snmp-library)
+* [DHT sensor library](https://github.com/adafruit/DHT-sensor-library)
+* [Adafruit GFX](https://github.com/adafruit/Adafruit-GFX-Library)
+* [Adafruit SSD1306](https://github.com/adafruit/Adafruit_SSD1306)
+
 4. Configure seu Wi-Fi no sketch:
 
 ```cpp
@@ -59,9 +66,14 @@ const char* password = "SUA_SENHA";
 ## Uso
 
 * Abra o Serial Monitor para verificar o IP do dispositivo.
-* Use qualquer cliente SNMP para consultar os OIDs de temperatura e umidade.
+* Acesse o **dashboard web** digitando o IP do ESP8266 no navegador.
+* O dashboard exibe:
 
-Exemplo de teste via `snmpget`:
+  * Temperatura e umidade em tempo real.
+  * IP e MAC do dispositivo.
+  * Status online (ponto verde pulsante).
+
+### Teste via SNMP
 
 ```bash
 snmpget -v2c -c public 192.168.X.X 1.3.6.1.4.1.4976.1.1.0
@@ -97,4 +109,4 @@ Este projeto é licenciado sob a [GPL3 License](LICENSE).
 ## Contato
 
 * GitHub: [Zer0G0ld](https://github.com/Zer0G0ld)
-* Twitter/LinkedIn: [LinkedIn](www.linkedin.com/in/theuzer0)
+* LinkedIn: [The Uzér0](https://www.linkedin.com/in/theuzer0)
