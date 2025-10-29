@@ -31,12 +31,39 @@ const char* password = "SENHA";
 #define DHTTYPE DHT11
 DHT dht(DHTPIN, DHTTYPE);
 
-// === SNMP ===
-WiFiUDP udp;
-SNMPAgent snmp("public", "private"); // Community strings
+// ===== SNMP =====
+// Device Info
+const char* creator      = "Zer0";
+const char* repo         = "https://github.com/Zer0G0ld/ZoneMonitor";
+const char* location     = "CPD";
+const char* description  = "ESP8266 ZoneMonitor";
+const char* deviceName   = "ESP-ZoneMonitor";
+String ipDevice;
+String macDevice;
+const char* ssidName     = "Ohost";
+String httpURL;
+const char* snmpPublic   = "public";
+const char* snmpPrivate  = "private";
 
-#define OID_TEMPERATURA ".1.3.6.1.4.1.4976.1.1.0"
-#define OID_UMIDADE     ".1.3.6.1.4.1.4976.1.2.0"
+// Sensor Data
+int snmpTemp = 0;
+int snmpHum  = 0;
+
+// OIDs
+#define OID_CREATOR       ".1.3.6.1.4.1.4976.1.1.1"
+#define OID_REPO          ".1.3.6.1.4.1.4976.1.1.2"
+#define OID_LOCATION      ".1.3.6.1.4.1.4976.1.1.3"
+#define OID_DESCRIPTION   ".1.3.6.1.4.1.4976.1.1.4"
+#define OID_DEVICENAME    ".1.3.6.1.4.1.4976.1.1.5"
+#define OID_IP            ".1.3.6.1.4.1.4976.1.1.6"
+#define OID_MAC           ".1.3.6.1.4.1.4976.1.1.7"
+#define OID_SSID          ".1.3.6.1.4.1.4976.1.1.8"
+#define OID_HTTP          ".1.3.6.1.4.1.4976.1.1.9"
+#define OID_SNMP_PUBLIC   ".1.3.6.1.4.1.4976.1.1.10"
+#define OID_SNMP_PRIVATE  ".1.3.6.1.4.1.4976.1.1.11"
+
+#define OID_TEMPERATURA   ".1.3.6.1.4.1.4976.1.2.1"
+#define OID_UMIDADE       ".1.3.6.1.4.1.4976.1.2.2"
 
 // === DISPLAY OLED ===
 #define SCREEN_WIDTH 128
@@ -156,6 +183,32 @@ void atualizarDisplay() {
   display.display();
 }
 
+// ===== SETUP SNMP =====
+void setupSNMP() {
+    snmp.setUDP(&udp);
+
+    // Device Info
+    snmp.addStringHandler(OID_CREATOR, creator);
+    snmp.addStringHandler(OID_REPO, repo);
+    snmp.addStringHandler(OID_LOCATION, location);
+    snmp.addStringHandler(OID_DESCRIPTION, description);
+    snmp.addStringHandler(OID_DEVICENAME, deviceName);
+    snmp.addStringHandler(OID_IP, &ipDevice);
+    snmp.addStringHandler(OID_MAC, &macDevice);
+    snmp.addStringHandler(OID_SSID, ssidName);
+    snmp.addStringHandler(OID_HTTP, &httpURL);
+    snmp.addStringHandler(OID_SNMP_PUBLIC, snmpPublic);
+    snmp.addStringHandler(OID_SNMP_PRIVATE, snmpPrivate);
+
+    // Sensor Data
+    snmp.addIntegerHandler(OID_TEMPERATURA, &snmpTemp);
+    snmp.addIntegerHandler(OID_UMIDADE, &snmpHum);
+
+    snmp.sortHandlers();
+    snmp.begin();
+    Serial.println("SNMP Agent completo iniciado!");
+}
+
 // ===== SETUP =====
 void setup() {
   Serial.begin(115200);
@@ -211,13 +264,8 @@ void setup() {
     display.display();
   }
 
-  // SNMP
-  snmp.setUDP(&udp);
-  snmp.addOIDHandler(OID_TEMPERATURA, std::to_string((int)tempAtual));
-  snmp.addOIDHandler(OID_UMIDADE, std::to_string((int)humAtual));
-  snmp.sortHandlers();
-  snmp.begin();
-  Serial.println("SNMP Agent iniciado!");
+  // ===== SNMP NO SETUP =====
+  setupSNMP();
 
   // HTTP
   server.on("/", handleRoot);
@@ -229,22 +277,25 @@ void setup() {
 
 // ===== LOOP =====
 void loop() {
-  snmp.loop();
-  server.handleClient();
-  yield();
+    snmp.loop();
+    server.handleClient();
+    yield();
 
-  static unsigned long lastUpdate = 0;
-  if (millis() - lastUpdate > 2000) {
-    lastUpdate = millis();
-    tempAtual = dht.readTemperature();
-    humAtual  = dht.readHumidity();
+    static unsigned long lastUpdate = 0;
+    if (millis() - lastUpdate > 2000) {
+        lastUpdate = millis();
+        tempAtual = dht.readTemperature();
+        humAtual  = dht.readHumidity();
 
-    // Atualiza valores SNMP
-    snmp.addOIDHandler(OID_TEMPERATURA, std::to_string((int)tempAtual));
-    snmp.addOIDHandler(OID_UMIDADE, std::to_string((int)humAtual));
+        // Atualiza SNMP
+        snmpTemp  = (int)tempAtual;
+        snmpHum   = (int)humAtual;
+        ipDevice  = WiFi.localIP().toString();
+        macDevice = WiFi.macAddress();
+        httpURL   = "http://" + ipDevice;
 
-    Serial.printf("Temp: %.1f°C | Umid: %.1f%%\n", tempAtual, humAtual);
-    atualizarDisplay();
-  }
+        atualizarDisplay();
+    }
 }
+
 
