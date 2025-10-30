@@ -31,12 +31,54 @@ const char* password = "SENHA";
 #define DHTTYPE DHT11
 DHT dht(DHTPIN, DHTTYPE);
 
-// === SNMP ===
-WiFiUDP udp;
-SNMPAgent snmp("public", "private"); // Community strings
+// ===== SNMP =====
+// Device Info
+const char* creator      = "Zer0";
+const char* repo         = "https://github.com/Zer0G0ld/ZoneMonitor";
+const char* location     = "CPD";
+const char* description  = "ESP8266 ZoneMonitor";
+const char* deviceName   = "ESP-ZoneMonitor";
+String ipDevice;
+String macDevice;
+const char* ssidName     = "UUID";
+String httpURL;
+const char* snmpPublic   = "public";
+const char* snmpPrivate  = "private";
 
-#define OID_TEMPERATURA ".1.3.6.1.4.1.4976.1.1.0"
-#define OID_UMIDADE     ".1.3.6.1.4.1.4976.1.2.0"
+// Sensor Data
+int snmpTemp = 0;
+int snmpHum  = 0;
+uint64_t sysUptime = 0;  // CORREÇÃO: uptime para SNMP
+
+// ===== SNMP =====
+// Base MIB-2 padrão
+#define OID_SYS_DESCR   ".1.3.6.1.2.1.1.1.0"
+#define OID_SYS_UPTIME  ".1.3.6.1.2.1.1.3.0"
+#define OID_SYS_NAME    ".1.3.6.1.2.1.1.5.0"
+
+// Base custom enterprise
+#define OID_BASE_ENTERPRISE ".1.3.6.1.4.1.49760"
+
+// Device Info
+#define OID_CREATOR       OID_BASE_ENTERPRISE ".1.1"
+#define OID_REPO          OID_BASE_ENTERPRISE ".1.2"
+#define OID_LOCATION      OID_BASE_ENTERPRISE ".1.3"
+#define OID_DESCRIPTION   OID_BASE_ENTERPRISE ".1.4"
+#define OID_DEVICENAME    OID_BASE_ENTERPRISE ".1.5"
+#define OID_IP            OID_BASE_ENTERPRISE ".1.6"
+#define OID_MAC           OID_BASE_ENTERPRISE ".1.7"
+#define OID_SSID          OID_BASE_ENTERPRISE ".1.8"
+#define OID_HTTP          OID_BASE_ENTERPRISE ".1.9"
+#define OID_SNMP_PUBLIC   OID_BASE_ENTERPRISE ".1.10"
+#define OID_SNMP_PRIVATE  OID_BASE_ENTERPRISE ".1.11"
+
+// Sensor Data
+#define OID_TEMPERATURA   OID_BASE_ENTERPRISE ".2.1"
+#define OID_UMIDADE       OID_BASE_ENTERPRISE ".2.2"
+
+// === SNMP CORE OBJECTS ===
+WiFiUDP udp;
+SNMPAgent snmp("public", "private");
 
 // === DISPLAY OLED ===
 #define SCREEN_WIDTH 128
@@ -52,6 +94,7 @@ float tempAtual = 0;
 float humAtual  = 0;
 String ipLocal  = "0.0.0.0";
 String macLocal = "";
+unsigned long startMillis = 0;  // CORREÇÃO: para calcular uptime
 
 // ===== HTML DASHBOARD =====
 const char PAGE_INDEX[] PROGMEM = R"rawliteral(
@@ -156,6 +199,48 @@ void atualizarDisplay() {
   display.display();
 }
 
+// ===== SETUP SNMP =====
+void setupSNMP() {
+    snmp.setUDP(&udp);
+
+    // Buffers fixos para IP, MAC e HTTP
+    static char ipBuffer[16];
+    static char macBuffer[18];
+    static char httpBuffer[64];
+
+    sprintf(ipBuffer, "%s", WiFi.localIP().toString().c_str());
+    sprintf(macBuffer, "%s", WiFi.macAddress().c_str());
+    sprintf(httpBuffer, "http://%s", WiFi.localIP().toString().c_str());
+
+    // ==== MIB-2 padrão ====
+    snmp.addReadOnlyStaticStringHandler(OID_SYS_DESCR, description);
+    snmp.addCounter64Handler(OID_SYS_UPTIME, &sysUptime); // CORREÇÃO: variável global
+    snmp.addReadOnlyStaticStringHandler(OID_SYS_NAME, deviceName);
+
+    // ==== OIDs customizados ====
+    snmp.addReadOnlyStaticStringHandler(OID_CREATOR, creator);
+    snmp.addReadOnlyStaticStringHandler(OID_REPO, repo);
+    snmp.addReadOnlyStaticStringHandler(OID_LOCATION, location);
+    snmp.addReadOnlyStaticStringHandler(OID_DESCRIPTION, description);
+    snmp.addReadOnlyStaticStringHandler(OID_DEVICENAME, deviceName);
+    snmp.addReadOnlyStaticStringHandler(OID_IP, ipBuffer);
+    snmp.addReadOnlyStaticStringHandler(OID_MAC, macBuffer);
+    snmp.addReadOnlyStaticStringHandler(OID_SSID, ssidName);
+    snmp.addReadOnlyStaticStringHandler(OID_HTTP, httpBuffer);
+    snmp.addReadOnlyStaticStringHandler(OID_SNMP_PUBLIC, snmpPublic);
+    snmp.addReadOnlyStaticStringHandler(OID_SNMP_PRIVATE, snmpPrivate);
+
+    // Sensor Data (inteiros)
+    snmp.addIntegerHandler(OID_TEMPERATURA, &snmpTemp);
+    snmp.addIntegerHandler(OID_UMIDADE, &snmpHum);
+
+    // Organiza os OIDs e inicia o agente
+    snmp.sortHandlers();
+    snmp.begin();
+
+    Serial.println("✅ SNMP Agent completo iniciado!");
+}
+
 // ===== SETUP =====
 void setup() {
   Serial.begin(115200);
@@ -211,13 +296,11 @@ void setup() {
     display.display();
   }
 
-  // SNMP
-  snmp.setUDP(&udp);
-  snmp.addOIDHandler(OID_TEMPERATURA, std::to_string((int)tempAtual));
-  snmp.addOIDHandler(OID_UMIDADE, std::to_string((int)humAtual));
-  snmp.sortHandlers();
-  snmp.begin();
-  Serial.println("SNMP Agent iniciado!");
+  // Inicia contagem de uptime
+  startMillis = millis();
+
+  // ===== SNMP NO SETUP =====
+  setupSNMP();
 
   // HTTP
   server.on("/", handleRoot);
@@ -229,22 +312,26 @@ void setup() {
 
 // ===== LOOP =====
 void loop() {
-  snmp.loop();
-  server.handleClient();
-  yield();
+    snmp.loop();
+    server.handleClient();
+    yield();
 
-  static unsigned long lastUpdate = 0;
-  if (millis() - lastUpdate > 2000) {
-    lastUpdate = millis();
-    tempAtual = dht.readTemperature();
-    humAtual  = dht.readHumidity();
+    static unsigned long lastUpdate = 0;
+    if (millis() - lastUpdate > 2000) {
+        lastUpdate = millis();
+        tempAtual = dht.readTemperature();
+        humAtual  = dht.readHumidity();
 
-    // Atualiza valores SNMP
-    snmp.addOIDHandler(OID_TEMPERATURA, std::to_string((int)tempAtual));
-    snmp.addOIDHandler(OID_UMIDADE, std::to_string((int)humAtual));
+        // Atualiza SNMP
+        snmpTemp  = (int)tempAtual;
+        snmpHum   = (int)humAtual;
+        ipDevice  = WiFi.localIP().toString();
+        macDevice = WiFi.macAddress();
+        httpURL   = "http://" + ipDevice;
 
-    Serial.printf("Temp: %.1f°C | Umid: %.1f%%\n", tempAtual, humAtual);
-    atualizarDisplay();
-  }
+        // Atualiza uptime SNMP
+        sysUptime = (millis() - startMillis) / 10; // centésimos de segundo
+
+        atualizarDisplay();
+    }
 }
-
