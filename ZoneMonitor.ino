@@ -21,10 +21,11 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <EEPROM.h>
 
 // ==================== CONFIGURAÇÕES ====================
 const char* ssid = "SSID";
-const char* password = "SENHA";
+const char* password = "PASSWORD";
 const bool useAuth = true;
 const char* httpUser = "admin";
 const char* httpPass = "1234";
@@ -108,6 +109,33 @@ float humAtual  = 0;
 String ipLocal  = "0.0.0.0";
 String macLocal = "";
 unsigned long startMillis = 0;  // CORREÇÃO: para calcular uptime
+
+// ===== CONFIGURAÇÕES SALVAS =====
+struct Config {
+  bool snmpAtivo;
+  char community[20];
+  char devLocation[20];
+  char devName[20];
+} config;
+
+void salvarConfig() {
+  EEPROM.put(0, config);
+  EEPROM.commit();
+}
+
+void carregarConfig() {
+  EEPROM.get(0, config);
+
+  // Se for a primeira vez (EEPROM vazio), aplicar defaults
+  if (config.community[0] == 0xFF || config.community[0] == '\0') {
+    config.snmpAtivo = true;
+    strcpy(config.community, snmpPublic);
+    strcpy(config.devLocation, location);
+    strcpy(config.devName, deviceName);
+    salvarConfig();
+  }
+}
+
 
 // ====== ESTILO GLOBAL ======
 const char* getGlobalStyle() {
@@ -323,31 +351,54 @@ bool checkAuth() {
   return true;
 }
 
+bool checkSession() {
+  if (!useAuth) return true;
+
+  // Permitir sempre acesso à tela de login
+  if (server.uri() == "/login") return true;
+
+  if (!sessionActive()) {
+    server.sendHeader("Location", "/login");
+    server.send(303);
+    return false;
+  }
+
+  sessionStart = millis(); // 🔥 renova sessão se ativo
+  return true;
+}
+
 // ===== HTTP HANDLERS =====
 void handleData() {
+  if (!checkSession()) return;
+
   String json = "{";
   json += "\"temp\":" + String(tempAtual, 1) + ",";
   json += "\"hum\":" + String(humAtual, 1) + ",";
   json += "\"snmpStatus\":" + String(snmpAtivo ? "true" : "false") + ",";
   json += "\"snmpCommunity\":\"" + String(snmpPublic) + "\",";
-  
-  // Histórico
+  json += "\"uptime\":" + String(sysUptime) + ",";
+  json += "\"ip\":\"" + ipDevice + "\",";
+  json += "\"mac\":\"" + macDevice + "\","; // ✅ vírgula corrigida
+
+  // Histórico de temperatura
   json += "\"histTemp\":[";
   int count = histFull ? HIST_MAX : histIndex;
-  for(int i=0; i<count; i++){
-      if(i>0) json += ",";
-      json += String(histTemp[i],1);
+  for(int i = 0; i < count; i++){
+    if(i > 0) json += ",";
+    json += String(histTemp[i], 1);
   }
   json += "],";
 
+  // Histórico de umidade
   json += "\"histHum\":[";
-  for(int i=0; i<count; i++){
-      if(i>0) json += ",";
-      json += String(histHum[i],1);
+  for(int i = 0; i < count; i++){
+    if(i > 0) json += ",";
+    json += String(histHum[i], 1);
   }
   json += "]";
 
   json += "}";
+
   server.send(200, "application/json", json);
 }
 
@@ -414,6 +465,8 @@ void handleLogin() {
 }*/
 
 void handlePage() {
+  if (!checkSession()) return;
+
   String page = server.arg("name");
   String html;
 
@@ -547,48 +600,6 @@ void handlePage() {
     html.replace("%SNMPCOMM%", String(snmpPublic));
   }
 
-  /*else if (page == "info") {
-    html = "<h2>Informações do Dispositivo</h2><pre>";
-
-    // ==== Hardware ====
-    html += "=== Hardware ===\n";
-    html += "MCU: ESP8266\n";
-    html += "Chip ID: " + String(ESP.getChipId()) + "\n";
-    html += "CPU: " + String(ESP.getCpuFreqMHz()) + " MHz\n";
-    html += "Memória Livre: " + String(ESP.getFreeHeap()) + " bytes\n";
-    html += "Temperatura Sensor: " + String(tempAtual,1) + " °C\n";
-    html += "Umidade Sensor: " + String(humAtual,1) + " %\n\n";
-
-    // ==== Rede ====
-    html += "=== Rede ===\n";
-    html += "IP Local: " + WiFi.localIP().toString() + "\n";
-    html += "MAC: " + WiFi.macAddress() + "\n";
-    html += "SSID: " + String(ssidName) + "\n";
-    html += "Gateway: " + WiFi.gatewayIP().toString() + "\n";
-    html += "Subnet: " + WiFi.subnetMask().toString() + "\n";
-    html += "DNS: " + WiFi.dnsIP().toString() + "\n\n";
-
-    // ==== Software / Sistema ====
-    html += "=== Sistema ===\n";
-    html += "Firmware SDK: " + String(ESP.getSdkVersion()) + "\n";
-    html += "Uptime: " + String((millis() - startMillis)/1000) + " s\n";
-    html += "SNMP Ativo: " + String(snmpAtivo ? "Sim" : "Não") + "\n";
-    html += "Community SNMP: " + String(snmpPublic) + "\n";
-    html += "HTTP URL: http://" + WiFi.localIP().toString() + "\n";
-
-    html += "\n=== Histórico (Últimos " + String(histFull ? HIST_MAX : histIndex) + " pontos) ===\n";
-    html += "Temperatura: ";
-    for(int i=0;i<(histFull?HIST_MAX:histIndex);i++){
-      html += String(histTemp[i],1) + " ";
-    }
-    html += "\nUmidade: ";
-    for(int i=0;i<(histFull?HIST_MAX:histIndex);i++){
-      html += String(histHum[i],1) + " ";
-    }
-
-    html += "</pre>";
-  }*/
-
   else if (page == "info") {
     html = R"rawliteral(
       <h2>Informações do Dispositivo <span class="status-dot snmp"></span></h2>
@@ -651,9 +662,6 @@ void handlePage() {
     html.replace("%HTTP%", "http://" + WiFi.localIP().toString());
   }
 
-
-
-
   else if (page == "config") {
     html = "<h3>Configurações</h3><p>Em breve...</p>";
   }
@@ -699,70 +707,164 @@ void atualizarDisplay() {
   display.display();
 }
 
-void handleReboot() {
+/*void handleReboot() {
   if (!checkAuth()) return;
   server.send(200, "text/plain", "Reiniciando...");
   delay(1000);
   ESP.restart();
+}*/
+void handleReboot() {
+  if (!checkSession()) return;
+
+  server.send(200, "text/html", "<h3>Reiniciando...</h3>");
+  delay(1000);
+  ESP.restart();
+}
+
+
+void handleConfigPage() {
+  String html = R"====(
+  <!DOCTYPE html>
+  <html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8">
+    <style>
+      body { font-family: Arial; background:#111; color:#eee; padding:20px; }
+      h2 { color:#4dd0e1; }
+      .card { background:#222; padding:20px; border-radius:10px; width:360px; }
+      label { display:block; margin-top:12px; font-size:14px; }
+      input[type=text] {
+        width:100%; padding:10px; border-radius:6px; border:none; margin-top:5px; background:#333; color:#fff;
+      }
+      .btn {
+        margin-top:18px; width:100%; padding:12px;
+        background:#4dd0e1; color:#000; border:none; font-weight:bold;
+        cursor:pointer; border-radius:8px; font-size:15px;
+      }
+      .btn:hover { background:#00bcd4; }
+      .checkbox { margin-top:12px; }
+      a { color:#4dd0e1; text-decoration:none; }
+      a:hover { text-decoration:underline; }
+    </style>
+  </head>
+
+  <body>
+    <h2>ZoneMonitor - Configurações SNMP</h2>
+    <div class="card">
+      <form action="/saveconfig" method="POST">
+        <label>SNMP Community:</label>
+        <input type="text" name="community" value=")====" + String(config.community) + R"====(" required>
+
+        <label class="checkbox">
+          <input type="checkbox" name="snmp" )====" + (config.snmpAtivo ? String("checked") : String("")) + R"====(>
+          SNMP Ativado
+        </label>
+
+        <button class="btn" type="submit">Salvar Configurações</button>
+      </form>
+    </div>
+    <br>
+    <a href="/">⬅ Voltar ao Painel</a>
+  </body>
+  </html>
+  )====";
+
+  server.send(200, "text/html", html);
+}
+
+void handleSaveConfig() {
+  if (!autenticado()) return;
+
+  if (!server.hasArg("community")) {
+    server.send(400, "text/plain", "Erro: Dados faltando!");
+    return;
+  }
+
+  // Lê campos recebidos
+  String newCommunity = server.arg("community");
+  bool newSNMPStatus = server.hasArg("snmp");
+
+  Serial.println("\n== Salvando Config SNMP ==");
+  Serial.println("SNMP: " + String(newSNMPStatus ? "ON" : "OFF"));
+  Serial.println("Community: " + newCommunity);
+
+  // Atualiza estrutura
+  config.snmpAtivo = newSNMPStatus;
+  strncpy(config.community, newCommunity.c_str(), sizeof(config.community));
+  config.community[sizeof(config.community) - 1] = '\0'; // segurança
+
+  // Salva na EEPROM
+  EEPROM.put(0, config);
+  EEPROM.commit();
+
+  // Aplica em tempo real
+  snmpAtivo = config.snmpAtivo;
+  strcpy((char*)snmpPublic, config.community);
+
+  server.sendHeader("Location", "/config");
+  server.send(303);
 }
 
 // ===== ADMIN PANEL (SIDEBAR + CONTEÚDO DINÂMICO) =====
 void handleAdmin() {
-  // 1️⃣ Se o uso de autenticação estiver ativo e a sessão expirada, redireciona para login
+  // Proteção única de autenticação
   if (useAuth && !sessionActive()) {
     server.sendHeader("Location", "/login");
     server.send(303);
     return;
   }
 
-  // 2️⃣ Se a autenticação HTTP estiver ativa, verifica usuário/senha
-  if (!checkAuth()) return;
+  Serial.println("Painel ADMIN carregado");
 
-  // 3️⃣ HTML do painel
-  String html = F("<!DOCTYPE html><html lang='pt-br'><head>");
+  String html;
+  html.reserve(5000); // ✅ evita fragmentação e resets
+
+  html += F("<!DOCTYPE html><html lang='pt-br'><head>");
   html += F("<meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1.0'>");
   html += F("<title>ZoneMonitor CPD</title>");
   html += getGlobalStyle();
   html += F("</head><body>");
-  
-  // ===== SIDEBAR + CONTEÚDO DINÂMICO =====
-  html += F("<div class='sidebar'>"
-              "<h2>ZoneMonitor</h2>"
-              "<button class='active' onclick=\"loadPage('dashboard', this)\">"
-                "<svg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'><path d='M3 13h8V3H3z'/><path d='M13 21h8V8h-8z'/><path d='M3 21h8v-4H3z'/></svg>"
-                "<span>Dashboard</span>"
-              "</button>"
-              "<button onclick=\"loadPage('info', this)\">"
-                "<svg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'><circle cx='12' cy='12' r='10'/><line x1='12' y1='16' x2='12' y2='12'/><line x1='12' y1='8' x2='12.01' y2='8'/></svg>"
-                "<span>Info</span>"
-              "</button>"
-              "<button onclick=\"loadPage('config', this)\">"
-                "<svg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'><circle cx='12' cy='12' r='3'/><path d='M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.09a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z'/></svg>"
-                "<span>Config</span>"
-              "</button>"
-              "<button onclick=\"loadPage('reboot', this)\">"
-                "<svg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'><polyline points='23 4 23 10 17 10'/><path d='M20.49 15A9 9 0 1 1 12 3v7'/></svg>"
-                "<span>Reiniciar</span>"
-              "</button>"
-            "</div>"
-            "<div id='content'><h3>Carregando...</h3></div>");
 
-  // ===== SCRIPT JS =====
-  html += F("<script>"
-              "async function loadPage(page, btn){"
-                "document.querySelectorAll('.sidebar button').forEach(b=>b.classList.remove('active'));"
-                "btn.classList.add('active');"
-                "const res=await fetch('/page?name='+page);"
-                "const html=await res.text();"
-                "document.getElementById('content').innerHTML=html;"
-              "}"
-              "window.onload=()=>{loadPage('dashboard', document.querySelector('.sidebar button.active'));};"
-            "</script>");
+  // Sidebar
+  html += F(
+    "<div class='sidebar'>"
+      "<h2>ZoneMonitor</h2>"
+      "<button class='active' onclick=\"loadPage('dashboard', this)\">"
+        "<span>Dashboard</span>"
+      "</button>"
+      "<button onclick=\"loadPage('info', this)\">"
+        "<span>Info</span>"
+      "</button>"
+      "<button onclick=\"loadPage('config', this)\">"
+        "<span>Config</span>"
+      "</button>"
+      "<button onclick=\"loadPage('reboot', this)\">"
+        "<span>Reiniciar</span>"
+      "</button>"
+    "</div>"
+    "<div id='content'><h3>Carregando...</h3></div>"
+  );
+
+  // Scripts
+  html += F(
+    "<script>"
+      "async function loadPage(page, btn){"
+        "document.querySelectorAll('.sidebar button').forEach(b=>b.classList.remove('active'));"
+        "btn.classList.add('active');"
+        "const res = await fetch('/page?name='+page);"
+        "const html = await res.text();"
+        "document.getElementById('content').innerHTML = html;"
+      "}"
+      "window.onload=()=>{"
+        "loadPage('dashboard', document.querySelector('.sidebar button.active'));"
+      "};"
+    "</script>"
+  );
 
   html += F("</body></html>");
+
   server.send(200, "text/html", html);
 }
-
 
 // ===== SETUP SNMP =====
 void setupSNMP() {
@@ -813,20 +915,23 @@ void setupSNMP() {
 // ===== SETUP =====
 void setup() {
   Serial.begin(115200);
-  delay(200);
-  dht.begin();
+  EEPROM.begin(512);
+  carregarConfig();  // Carrega configuração da EEPROM
+
+  snmpAtivo = config.snmpAtivo;
+  strcpy((char*)snmpPublic, config.community);
 
   // OLED
   Wire.begin(D2, D1);
-  if(!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
+  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
     Serial.println("Falha OLED!");
-    while(true);
+    while (true);
   }
 
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   display.setTextSize(1);
-  display.setCursor(0,0);
+  display.setCursor(0, 0);
   display.println("ZoneMonitor");
   display.println("Conectando WiFi...");
   display.display();
@@ -835,7 +940,8 @@ void setup() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
   int tentativas = 0;
-  while(WiFi.status() != WL_CONNECTED && tentativas < 40) {
+
+  while (WiFi.status() != WL_CONNECTED && tentativas < 40) {
     delay(500);
     Serial.print(".");
     display.print(".");
@@ -843,7 +949,7 @@ void setup() {
     tentativas++;
   }
 
-  if(WiFi.status() == WL_CONNECTED) {
+  if (WiFi.status() == WL_CONNECTED) {
     ipLocal = WiFi.localIP().toString();
     macLocal = WiFi.macAddress();
 
@@ -852,8 +958,7 @@ void setup() {
     Serial.println("MAC: " + macLocal);
 
     display.clearDisplay();
-    display.setTextSize(1);
-    display.setCursor(0,0);
+    display.setCursor(0, 0);
     display.println("WiFi conectado!");
     display.print("IP: "); display.println(ipLocal);
     display.print("MAC: "); display.println(macLocal);
@@ -865,52 +970,55 @@ void setup() {
     display.display();
   }
 
-  // Inicia contagem de uptime
-  startMillis = millis();
+  dht.begin(); // ✅ Agora apenas UMA vez e após WiFi
 
-  // ===== SNMP NO SETUP =====
+  startMillis = millis(); // Inicia uptime SNMP
+
+  // SNMP
   setupSNMP();
 
-  // HTTP
+  // Rotas HTTP
   server.on("/", handleAdmin);
   server.on("/admin", handleAdmin);
   server.on("/login", handleLogin);
   server.on("/page", handlePage);
   server.on("/data", handleData);
   server.on("/reboot", handleReboot);
+  server.on("/config", HTTP_GET, handleConfigPage);
+  server.on("/saveconfig", HTTP_POST, handleSaveConfig);
   server.begin();
+
   Serial.println("HTTP ativo.");
   Serial.println("Acesse: http://" + ipLocal);
 }
 
 // ===== LOOP =====
 void loop() {
-    snmp.loop();
-    server.handleClient();
-    yield();
+  snmp.loop();
+  server.handleClient();
+  yield();
 
-    static unsigned long lastUpdate = 0;
-    if (millis() - lastUpdate > 2000) {
-      lastUpdate = millis();
-      tempAtual = dht.readTemperature();
-      humAtual  = dht.readHumidity();
+  static unsigned long lastUpdate = 0;
+  if (millis() - lastUpdate >= 2000) {
+    lastUpdate = millis();
 
-      // Atualiza histórico
-      histTemp[histIndex] = isnan(tempAtual) ? 0 : tempAtual;
-      histHum[histIndex]  = isnan(humAtual) ? 0 : humAtual;
-      histIndex++;
-      if(histIndex >= HIST_MAX) { histIndex = 0; histFull = true; }
+    tempAtual = dht.readTemperature();
+    humAtual  = dht.readHumidity();
 
-      // Atualiza SNMP
-      snmpTemp  = isnan(tempAtual) ? 0 : (int)tempAtual;
-      snmpHum   = isnan(humAtual) ? 0 : (int)humAtual;
-      ipDevice  = WiFi.localIP().toString();
-      macDevice = WiFi.macAddress();
-      httpURL   = "http://" + ipDevice;
+    // Histórico
+    histTemp[histIndex] = isnan(tempAtual) ? 0 : tempAtual;
+    histHum[histIndex]  = isnan(humAtual) ? 0 : humAtual;
+    histIndex = (histIndex + 1) % HIST_MAX;
+    if (histIndex == 0) histFull = true;
 
-      // Atualiza uptime SNMP (em centésimos de segundo)
-      sysUptime = (millis() - startMillis) / 10;
+    // SNMP
+    snmpTemp = isnan(tempAtual) ? 0 : (int)tempAtual;
+    snmpHum  = isnan(humAtual)  ? 0 : (int)humAtual;
+    ipDevice  = WiFi.localIP().toString();
+    macDevice = WiFi.macAddress();
+    httpURL   = "http://" + ipDevice;
+    sysUptime = (millis() - startMillis) / 10;
 
-      atualizarDisplay(); // atualiza OLED
+    atualizarDisplay();
   }
 }
