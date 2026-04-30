@@ -15,8 +15,8 @@
  */
 
 // ========== CREDENCIAIS WIFI ==========
-const char* ssid = "Ohost";
-const char* password = "h12345678";
+const char* ssid = "SEU_SSID";
+const char* password = "SEU_PASSWORD";
 
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
@@ -154,19 +154,16 @@ void saveConfig() {
 }
 
 // OIDs como strings
-const char* OID_TEMP_CALIB_STR = ".1.3.6.1.4.1.49760.3.3";
-const char* OID_HUM_CALIB_STR = ".1.3.6.1.4.1.49760.3.6";
-const char* OID_RSSI_STR = ".1.3.6.1.4.1.49760.2.3";
-const char* OID_DEVICE_NAME_STR = ".1.3.6.1.4.1.49760.1.3";
+const char* OID_TEMP_CALIB_STR = "1.3.6.1.4.1.49760.3.3";
+const char* OID_HUM_CALIB_STR = "1.3.6.1.4.1.49760.3.6";
+const char* OID_RSSI_STR = "1.3.6.1.4.1.49760.2.3";
+const char* OID_DEVICE_NAME_STR = "1.3.6.1.4.1.49760.1.3";
 
 // Callback para mensagens SNMP
 void onSNMPMessage(const SNMP::Message *message, const IPAddress remote, const uint16_t port) {
     Serial.println("[SNMP] Mensagem recebida!");
     
-    // Pega a lista de variáveis solicitadas
     SNMP::VarBindList *varbindlist = message->getVarBindList();
-    
-    // Cria resposta
     SNMP::Message *response = new SNMP::Message(SNMP::Version::V2C, "public", SNMP::Type::GetResponse);
     response->setRequestID(message->getRequestID());
     
@@ -174,29 +171,27 @@ void onSNMPMessage(const SNMP::Message *message, const IPAddress remote, const u
         SNMP::VarBind *varbind = (*varbindlist)[index];
         const char *oidName = varbind->getName();
         
-        Serial.print("[SNMP] OID solicitada: ");
-        Serial.println(oidName);
+        Serial.print("[SNMP] OID solicitada: '");
+        Serial.print(oidName);
+        Serial.println("'");
         
-        // Verifica qual OID foi pedida
-        if (strcmp(oidName, OID_TEMP_CALIB_STR) == 0) {
+        // COMPARAÇÃO SEM O PONTO INICIAL!
+        if (strcmp(oidName, "1.3.6.1.4.1.49760.3.3") == 0) {
+            Serial.println("[SNMP] Respondendo Temperatura");
             SNMP::IntegerBER* value = new SNMP::IntegerBER(snmpTempCalib);
             response->add(oidName, value);
         }
-        else if (strcmp(oidName, OID_HUM_CALIB_STR) == 0) {
+        else if (strcmp(oidName, "1.3.6.1.4.1.49760.3.6") == 0) {
+            Serial.println("[SNMP] Respondendo Umidade");
             SNMP::IntegerBER* value = new SNMP::IntegerBER(snmpHumCalib);
             response->add(oidName, value);
         }
-        else if (strcmp(oidName, OID_RSSI_STR) == 0) {
+        else if (strcmp(oidName, "1.3.6.1.4.1.49760.2.3") == 0) {
             SNMP::IntegerBER* value = new SNMP::IntegerBER(snmpRSSI);
-            response->add(oidName, value);
-        }
-        else if (strcmp(oidName, OID_DEVICE_NAME_STR) == 0) {
-            SNMP::OctetStringBER* value = new SNMP::OctetStringBER(deviceName);
             response->add(oidName, value);
         }
     }
     
-    // Envia resposta
     snmp.send(response, remote, port);
     delete response;
 }
