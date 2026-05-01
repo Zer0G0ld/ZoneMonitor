@@ -1,241 +1,314 @@
-# 📄 Documentação Técnica – SNMP no ZoneMonitor
+# Documentação Técnica – SNMP ZoneMonitor v2.0
 
-**Dispositivo:** ESP8266 + DHT11 + OLED + SNMP + HTTP
-**Versão:** 1.4
-**Autor:** Zer0
-**Data:** 30/10/2025
-**Objetivo:** Expor informações do sensor e do dispositivo via SNMP, podendo ser monitorado por Zabbix, TheDude ou outras ferramentas de gerenciamento de rede.
-
----
-
-## 1️⃣ O que é SNMP e como funciona aqui
-
-SNMP (Simple Network Management Protocol) é um protocolo usado para **monitorar e gerenciar dispositivos em rede**. No ZoneMonitor:
-
-* O ESP8266 atua como **Agente SNMP**.
-* Ele expõe **OIDs** (Object Identifiers) que representam informações do dispositivo.
-* O agente escuta requisições **UDP** na porta SNMP padrão (161).
-* As informações podem ser **lidas (GET)** ou contadas (Counter64), mas não há **setters**, ou seja, você não configura parâmetros via SNMP, apenas lê.
+**Autor:** Zer0G0ld | Zer0 Tech Enterprise  
+**Data:** 01/05/2026  
+**Versão:** 2.0 (Produção)  
+**Objetivo:** Documentar a implementação SNMP v2c para integração com sistemas de gerenciamento de rede (NMS) como Zabbix, PRTG, Nagios e TheDude.
 
 ---
 
-## 2️⃣ Estrutura de OIDs
+## Índice
 
-### 2.1 MIB-2 padrão
-
-Base padrão usada em quase todo dispositivo SNMP:
-
-| OID                  | Descrição | Valor no ZoneMonitor                  |
-| -------------------- | --------- | ------------------------------------- |
-| `.1.3.6.1.2.1.1.1.0` | sysDescr  | `"ESP8266 ZoneMonitor"`               |
-| `.1.3.6.1.2.1.1.3.0` | sysUpTime | Uptime do HW em centésimos de segundo |
-| `.1.3.6.1.2.1.1.5.0` | sysName   | `"ESP-ZoneMonitor"`                   |
-
-### 2.2 Enterprise OIDs customizados
-
-Todos criados sob `.1.3.6.1.4.1.49760`:
-
-| OID                       | Descrição           | Tipo   |
-| ------------------------- | ------------------- | ------ |
-| `.1.3.6.1.4.1.49760.1.1`  | Criador             | String |
-| `.1.3.6.1.4.1.49760.1.2`  | GitHub Repo         | String |
-| `.1.3.6.1.4.1.49760.1.3`  | Localização         | String |
-| `.1.3.6.1.4.1.49760.1.4`  | Descrição           | String |
-| `.1.3.6.1.4.1.49760.1.5`  | Nome do dispositivo | String |
-| `.1.3.6.1.4.1.49760.1.6`  | IP                  | String |
-| `.1.3.6.1.4.1.49760.1.7`  | MAC                 | String |
-| `.1.3.6.1.4.1.49760.1.8`  | SSID Wi-Fi          | String |
-| `.1.3.6.1.4.1.49760.1.9`  | HTTP URL            | String |
-| `.1.3.6.1.4.1.49760.1.10` | SNMP public         | String |
-| `.1.3.6.1.4.1.49760.1.11` | SNMP private        | String |
-
-### 2.3 OIDs de sensores e monitoramento
-
-| OID                      | Descrição                            | Tipo      |
-| ------------------------ | ------------------------------------ | --------- |
-| `.1.3.6.1.4.1.49760.2.1` | Temperatura (°C)                     | Integer   |
-| `.1.3.6.1.4.1.49760.2.2` | Umidade (%)                          | Integer   |
-| `.1.3.6.1.4.1.49760.3.1` | Contador de falhas do sensor         | Integer   |
-| `.1.3.6.1.4.1.49760.3.2` | RSSI Wi-Fi (dBm)                     | Integer   |
-| `.1.3.6.1.4.1.49760.3.3` | Heap livre (bytes)                   | Integer   |
-| `.1.3.6.1.4.1.49760.3.4` | Status HTTP (1 = ativo, 0 = inativo) | Integer   |
-| `.1.3.6.1.4.1.49760.3.5` | Uptime HW (centésimos de segundo)    | Counter64 |
+1. [Arquitetura do Agente](#1-arquitetura-do-agente)
+2. [Estrutura de OIDs (MIB Customizada)](#2-estrutura-de-oids-mib-customizada)
+   - 2.1 [Identificação do Dispositivo](#21-identificação-do-dispositivo-1313614141497601)
+   - 2.2 [Telemetria de Sensores](#22-telemetria-de-sensores-1313614141497602)
+   - 2.3 [Diagnóstico e Saúde](#23-diagnóstico-e-saúde-1313614141497603)
+   - 2.4 [MIB-2 Padrão (Sistema)](#24-mib-2-padrão-sistema)
+3. [Integração com Zabbix](#3-integração-com-zabbix)
+   - 3.1 [Template Zabbix](#31-template-zabbix-zoneMonitor)
+   - 3.2 [Triggers Recomendados](#32-triggers-recomendados)
+   - 3.3 [Gráficos e Dashboards](#33-gráficos-e-dashboards)
+4. [Integração com Outras Ferramentas](#4-integração-com-outras-ferramentas)
+5. [Comandos de Validação (CLI)](#5-comandos-de-validação-cli)
+6. [Dicas de Monitoramento Avançado](#6-dicas-de-monitoramento-avançado)
+7. [Diagrama SNMP – ZoneMonitor](#7-diagrama-snmp--zonemonitor)
+8. [Fluxo de Atualização](#8-fluxo-de-atualização)
+9. [Considerações de Segurança](#9-considerações-de-segurança)
+10. [Histórico de Revisões](#10-histórico-de-revisões)
 
 ---
 
-## 3️⃣ Funcionamento interno
+## 1. Arquitetura do Agente
 
-1. **Setup SNMP** (`setupSNMP()`):
+O ZoneMonitor opera um **Agente SNMP v2c** otimizado para o ESP8266, rodando em paralelo ao servidor HTTP.
 
-   * Configura o agente SNMP com `public` e `private`.
-   * Registra OIDs com `addReadOnlyStaticStringHandler` ou `addIntegerHandler`.
-   * `sortHandlers()` organiza internamente os OIDs.
-   * `snmp.begin()` inicia o agente.
+| Parâmetro | Valor | Descrição |
+|-----------|-------|-----------|
+| **Protocolo** | SNMP v2c | Suporte a GET e GETNEXT |
+| **Porta** | 161 (UDP) | Porta padrão SNMP |
+| **Comunidade de Leitura** | `public` | Configurável via Web/LittleFS |
+| **Comunidade de Escrita** | `private` | Não implementado (read-only) |
+| **Frequência de Atualização** | 10 segundos | Cache SNMP renovado para preservar CPU |
+| **Buffer UDP** | 255 bytes | Tamanho máximo do pacote |
 
-2. **Loop principal** (`loop()`):
+**Arquitetura em camadas:**
 
-   * `snmp.loop()` processa requisições UDP de clientes SNMP.
-   * Atualiza variáveis SNMP a cada 10 segundos:
-
-     * Temperatura e umidade
-     * Contador de falhas do sensor
-     * RSSI, heap livre, status HTTP, uptime
-
-3. **Atualização do Display/OLED**:
-
-   * A cada 2 segundos, atualiza a tela e lê sensor DHT11.
-   * Incrementa contador de falhas se sensor retornar NAN.
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Cliente NMS                          │
+│              (Zabbix / PRTG / Nagios)                   │
+└─────────────────────┬───────────────────────────────────┘
+                      │ UDP 161
+                      ▼
+┌─────────────────────────────────────────────────────────┐
+│              Agente SNMP (ESP8266)                      │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐    │
+│  │  snmp.loop()│  │ onMessage() │  │  Handlers   │    │
+│  └─────────────┘  └─────────────┘  └─────────────┘    │
+└─────────────────────┬───────────────────────────────────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────────────────┐
+│              Cache SNMP (atualizado a cada 10s)         │
+│  temp_calib │ hum_calib │ rssi │ uptime │ heap         │
+└─────────────────────────────────────────────────────────┘
+```
 
 ---
 
-## 4️⃣ Como testar com SNMP
+## 2. Estrutura de OIDs (MIB Customizada)
 
-Você precisa de um **cliente SNMP**, por exemplo `snmpwalk` ou `snmpget` em Linux/Windows.
+A árvore de OIDs foi organizada sob o prefixo Enterprise da Zer0 Tech: **.1.3.6.1.4.1.49760**
 
-### 4.1 Comando básico
+### 2.1 Identificação do Dispositivo (.1.3.6.1.4.1.49760.1)
+
+| OID Final | Descrição | Tipo | Exemplo | Uso |
+|-----------|-----------|------|---------|-----|
+| `.1.1` | Versão do Firmware | String | `"2.0"` | Inventário |
+| `.1.2` | Data de Build | String | `"Apr 30 2026"` | Inventário |
+| `.1.3` | Nome do Dispositivo | String | `"ZoneMonitor-CPD-01"` | **Identificação** |
+| `.1.4` | Localização | String | `"CPD Principal"` | Inventário |
+| `.1.5` | Endereço IP | String | `"192.168.8.95"` | **Descoberta de rede** |
+| `.1.6` | Endereço MAC | String | `"CC:50:E3:55:DB:62"` | **Identificação única** |
+| `.1.7` | SSID Wi-Fi | String | `"Ohost"` | Diagnóstico |
+
+### 2.2 Telemetria de Sensores (.1.3.6.1.4.1.49760.2)
+
+| OID Final | Descrição | Tipo | Escala | Exemplo | Uso |
+|-----------|-----------|------|--------|---------|-----|
+| `.2.1` | **Temperatura Calibrada** | Integer | x100 | 2450 = 24.50°C | **Alertas e dashboards** |
+| `.2.2` | **Umidade Calibrada** | Integer | x100 | 5800 = 58.00% | **Alertas e dashboards** |
+
+### 2.3 Diagnóstico e Saúde (.1.3.6.1.4.1.49760.3)
+
+| OID Final | Descrição | Tipo | Faixa | Uso |
+|-----------|-----------|------|-------|-----|
+| `.3.1` | Temperatura Bruta (Raw) | Integer | 0-50°C (x100) | Diagnóstico de hardware |
+| `.3.2` | Sinal WiFi (RSSI) | Integer | -100 a 0 dBm | Qualidade de conectividade |
+| `.3.3` | Heap Livre | Integer | 0-80000 bytes | Detecção de memory leak |
+| `.3.4` | Status HTTP | Integer | 0=offline, 1=online | Monitoramento do servidor web |
+| `.3.5` | Uptime do Hardware | Counter64 | centésimos de segundo | Detecção de reboots |
+
+### 2.4 MIB-2 Padrão (Sistema)
+
+| OID | Descrição | Valor no ZoneMonitor |
+|-----|-----------|---------------------|
+| `.1.3.6.1.2.1.1.1.0` | sysDescr | `"Zer0 Tech ZoneMonitor v2.0"` |
+| `.1.3.6.1.2.1.1.3.0` | sysUpTime | Uptime em centésimos de segundo |
+| `.1.3.6.1.2.1.1.5.0` | sysName | Nome configurável via web |
+
+---
+
+## 3. Integração com Zabbix
+
+### 3.1 Template Zabbix (ZoneMonitor)
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<zabbix_export>
+    <templates>
+        <template>
+            <name>ZoneMonitor v2.0</name>
+            <description>Template para monitoramento de temperatura/umidade via SNMP</description>
+            <groups>
+                <group>IoT</group>
+            </groups>
+            <items>
+                <item>
+                    <name>Temperatura Calibrada</name>
+                    <key>zone.temperature</key>
+                    <type>SNMPv2 agent</type>
+                    <snmp_oid>.1.3.6.1.4.1.49760.2.1</snmp_oid>
+                    <units>°C</units>
+                    <value_type>Numeric (float)</value_type>
+                    <multiplier>0.01</multiplier>
+                    <delay>60s</delay>
+                </item>
+                <item>
+                    <name>Umidade Calibrada</name>
+                    <key>zone.humidity</key>
+                    <type>SNMPv2 agent</type>
+                    <snmp_oid>.1.3.6.1.4.1.49760.2.2</snmp_oid>
+                    <units>%</units>
+                    <value_type>Numeric (float)</value_type>
+                    <multiplier>0.01</multiplier>
+                    <delay>60s</delay>
+                </item>
+                <item>
+                    <name>WiFi RSSI</name>
+                    <key>zone.rssi</key>
+                    <type>SNMPv2 agent</type>
+                    <snmp_oid>.1.3.6.1.4.1.49760.3.2</snmp_oid>
+                    <units>dBm</units>
+                    <value_type>Numeric (integer)</value_type>
+                    <delay>5m</delay>
+                </item>
+                <item>
+                    <name>Uptime do Sistema</name>
+                    <key>zone.uptime</key>
+                    <type>SNMPv2 agent</type>
+                    <snmp_oid>.1.3.6.1.2.1.1.3.0</snmp_oid>
+                    <units>centésimos de segundo</units>
+                    <value_type>Numeric (unsigned)</value_type>
+                    <delay>5m</delay>
+                </item>
+            </items>
+        </template>
+    </templates>
+</zabbix_export>
+```
+
+### 3.2 Triggers Recomendados
+
+| Trigger | Expressão | Severidade | Ação |
+|---------|-----------|------------|------|
+| **Temperatura alta** | `last(/ZoneMonitor/temp_calib) > 28` | High | Notificação por e-mail/Telegram |
+| **Temperatura crítica** | `last(/ZoneMonitor/temp_calib) > 32` | Disaster | Alerta + escalonamento |
+| **Umidade alta** | `last(/ZoneMonitor/hum_calib) > 80` | Warning | Notificação |
+| **Sinal WiFi fraco** | `last(/ZoneMonitor/rssi) < -80` | Warning | Verificar posição do ESP |
+| **Dispositivo reiniciou** | `last(/ZoneMonitor/uptime) < previous(/ZoneMonitor/uptime)` | Information | Registro log |
+| **Sensor falhou** | `last(/ZoneMonitor/temp_raw) = 0` | High | Verificar hardware |
+
+### 3.3 Gráficos e Dashboards
+
+**Dashboard Zabbix sugerido:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     ZoneMonitor - CPD Principal                 │
+├─────────────────────────┬───────────────────────────────────────┤
+│                         │                                       │
+│   Temperatura Atual     │     Gráfico de Temperatura (24h)      │
+│   ┌─────────────────┐   │   ┌─────────────────────────────────┐ │
+│   │     24.5°C      │   │   │ 30 ┤                    ┌─────   │ │
+│   │   Normal (20-28)│   │   │ 25 ┤     ┌──────┐      │         │ │
+│   └─────────────────┘   │   │ 20 ┤─────┘      └──────┘         │ │
+│                         │   └─────────────────────────────────┘ │
+├─────────────────────────┼───────────────────────────────────────┤
+│   Umidade Atual         │     Status SNMP                        │
+│   ┌─────────────────┐   │   ┌─────────────────────────────────┐ │
+│   │      58%        │   │   │ ✅ Agente ativo na porta 161     │ │
+│   │   Normal (40-70)│   │   │ 📡 Comunidade: public            │ │
+│   └─────────────────┘   │   └─────────────────────────────────┘ │
+└─────────────────────────┴───────────────────────────────────────┘
+```
+
+---
+
+## 4. Integração com Outras Ferramentas
+
+### 4.1 PRTG
+
+| Configuração | Valor |
+|--------------|-------|
+| **Sensor Type** | SNMP Custom |
+| **OID** | `.1.3.6.1.4.1.49760.2.1` |
+| **Community** | `public` |
+| **Unit** | °C |
+| **Scaling** | Dividir por 100 |
+
+### 4.2 Nagios/Icinga
 
 ```bash
-snmpwalk -v2c -c public 192.168.1.100
+# Comando para check_temperature
+define command {
+    command_name    check_zone_temperature
+    command_line    $USER1$/check_snmp -H $HOSTADDRESS$ -o .1.3.6.1.4.1.49760.2.1 -C public -P 2c -u '°C' -m '^([0-9]+)$' -w 2800 -c 3200
+}
 ```
 
-* `-v2c` → SNMP v2c (compatível com nosso agente)
-* `-c public` → comunidade pública
-* `192.168.1.100` → IP do ESP8266
+### 4.3 Grafana (via Prometheus SNMP Exporter)
 
-### 4.2 Testar OIDs específicos
+```yaml
+# snmp_exporter configuration
+modules:
+  zonemonitor:
+    walk:
+      - 1.3.6.1.4.1.49760.2.1  # temperature
+      - 1.3.6.1.4.1.49760.2.2  # humidity
+      - 1.3.6.1.4.1.49760.3.2  # rssi
+    version: 2
+    community: public
+```
+
+---
+
+## 5. Comandos de Validação (CLI)
+
+### 5.1 Varredura Completa
 
 ```bash
-snmpget -v2c -c public 192.168.1.100 .1.3.6.1.4.1.49760.2.1
+snmpwalk -v2c -c public 192.168.8.95 .1.3.6.1.4.1.49760
 ```
 
-* Retorna **temperatura atual**.
+**Saída esperada:**
+```
+SNMPv2-SMI::enterprises.49760.1.3 = STRING: "ZoneMonitor-CPD"
+SNMPv2-SMI::enterprises.49760.1.5 = STRING: "192.168.8.95"
+SNMPv2-SMI::enterprises.49760.1.6 = STRING: "CC:50:E3:55:DB:62"
+SNMPv2-SMI::enterprises.49760.2.1 = INTEGER: 2450
+SNMPv2-SMI::enterprises.49760.2.2 = INTEGER: 5800
+SNMPv2-SMI::enterprises.49760.3.2 = INTEGER: -52
+```
 
-Outros exemplos:
+### 5.2 Leitura de Temperatura Específica
 
 ```bash
-snmpget -v2c -c public 192.168.1.100 .1.3.6.1.4.1.49760.3.2   # RSSI
-snmpget -v2c -c public 192.168.1.100 .1.3.6.1.4.1.49760.3.3   # Heap livre
+snmpget -v2c -c public 192.168.8.95 .1.3.6.1.4.1.49760.2.1
 ```
 
-### 4.3 Testar uptime
+**Saída esperada:**
+```
+SNMPv2-SMI::enterprises.49760.2.1 = INTEGER: 2450
+```
+
+### 5.3 Leitura do Nome do Dispositivo
 
 ```bash
-snmpget -v2c -c public 192.168.1.100 .1.3.6.1.2.1.1.3.0
+snmpget -v2c -c public 192.168.8.95 .1.3.6.1.4.1.49760.1.3
 ```
 
-* Retorna `sysUpTime` do dispositivo (centésimos de segundo).
+### 5.4 Walk em todas as OIDs (MIB-2 + Enterprise)
 
----
-
-## 5️⃣ Considerações importantes
-
-1. **Comunidades SNMP**
-
-   * `public` → leitura
-   * `private` → normalmente usado para escrita, mas nosso agente não implementa write.
-
-2. **Atualização**
-
-   * Variáveis de sensor são atualizadas **a cada 10s para SNMP**, então não espere mudanças instantâneas.
-
-3. **Segurança**
-
-   * SNMP v2c é **sem criptografia**, só comunidade como senha.
-   * Evite expor rede pública.
-
-4. **SNMP vs HTTP**
-
-   * HTTP é apenas visualização.
-   * SNMP é para integração com sistemas de monitoramento (Zabbix, TheDude, PRTG).
-
-5. **Integração em Zabbix**
-
-   * Crie itens SNMP usando OIDs customizados.
-   * Por exemplo, para temperatura:
-
-     * Tipo de Item: SNMP v2
-     * OID: `.1.3.6.1.4.1.49760.2.1`
-     * Tipo de Dados: Numeric (float ou integer)
-   * Para alarmes: use contador de falhas ou heap crítico.
-
----
-
-## 6️⃣ Dicas de monitoramento avançado
-
-* **Cronometrar uptime real**: use `sysUptime` e calcule diferença.
-* **Falhas do sensor**: se `OID_SENSOR_FAIL` aumentar muito, considerar reset do DHT11.
-* **Heap livre baixo**: importante para estabilidade do ESP8266.
-* **RSSI Wi-Fi**: indica qualidade de conexão; menor que -80 dBm → sinal fraco.
-* **HTTP Status**: pode indicar se o servidor web está respondendo ou travou.
-
----
-
-# 🖼 Diagrama SNMP – ZoneMonitor
+```bash
+snmpwalk -v2c -c public 192.168.8.95
 ```
-.1.3.6.1.2.1.1       (MIB-2 Standard)
-├─ .1.3.6.1.2.1.1.1.0   sysDescr           → String   "ESP8266 ZoneMonitor"
-├─ .1.3.6.1.2.1.1.3.0   sysUpTime          → Counter64 (centésimos de segundo)
-└─ .1.3.6.1.2.1.1.5.0   sysName            → String   "ESP-ZoneMonitor"
 
-.1.3.6.1.4.1.49760    (Enterprise ZoneMonitor)
-├─ 1   Device Info (Strings)
-│   ├─ .1   Creator          → String "Zer0"
-│   ├─ .2   Repo             → String "https://github.com/Zer0G0ld/ZoneMonitor"
-│   ├─ .3   Location         → String "CPD"
-│   ├─ .4   Description      → String "ESP8266 ZoneMonitor"
-│   ├─ .5   DeviceName       → String "ESP-ZoneMonitor"
-│   ├─ .6   IP               → String "192.168.x.x"
-│   ├─ .7   MAC              → String "AA:BB:CC:DD:EE:FF"
-│   ├─ .8   SSID             → String "UUID"
-│   ├─ .9   HTTP URL         → String "http://192.168.x.x"
-│   ├─ .10  SNMP Public      → String "public"
-│   └─ .11  SNMP Private     → String "private"
+### 5.5 Teste de Timeout (redes congestionadas)
 
-├─ 2   Sensor Data (Integers)
-│   ├─ .1   Temperatura       → Integer (°C)
-│   └─ .2   Umidade           → Integer (%)
-
-└─ 3   Device Monitor (Integers / Counter64)
-    ├─ .1   Sensor Fail Count → Integer
-    ├─ .2   WiFi RSSI         → Integer (dBm)
-    ├─ .3   Free Heap         → Integer (bytes)
-    ├─ .4   HTTP Status       → Integer (1=online,0=offline)
-    └─ .5   HW Uptime         → Counter64 (centésimos de segundo)
+```bash
+snmpget -v2c -c public -t 5 -r 3 192.168.8.95 .1.3.6.1.4.1.49760.2.1
 ```
 
 ---
 
-# 🔄 Fluxo de Atualização
+## 6. Dicas de Monitoramento Avançado
 
-1. **Loop principal do ESP8266**:
+### 6.1 Detecção de Reboot
 
-   * **OLED / Sensor DHT11**: Atualiza a cada 2 segundos.
-   * **Variáveis SNMP**: Atualiza a cada 10 segundos (`snmpTemp`, `snmpHum`, `snmpRSSI`, `snmpHeap`, etc).
+Monitore o `sysUpTime` (`.1.3.6.1.2.1.1.3.0`). Se o valor resetar, o dispositivo reiniciou.
 
-2. **Agente SNMP**:
+**Exemplo de trigger no Zabbix:**
+```
+Expression: last(/ZoneMonitor/sysUptime) < previous(/ZoneMonitor/sysUptime)
+Severity: Information
+```
 
-   * Escuta requisições UDP na porta 161.
-   * Responde GET requests com os valores atuais.
-   * `Counter64` usado para uptime do hardware.
+### 6.2 Saúde da RAM
 
-3. **Cliente SNMP externo**:
+Quedas constantes no Heap Livre (`.3.3`) podem indicar *memory leaks*.
 
-   * Pode usar `snmpwalk`, `snmpget`, ou sistemas como **Zabbix**, **PRTG**, **TheDude**.
-   * Exemplo:
-
-     ```bash
-     snmpwalk -v2c -c public 192.168.1.100
-     ```
-   * Para OIDs específicos:
-
-     ```bash
-     snmpget -v2c -c public 192.168.1.100 .1.3.6.1.4.1.49760.2.1
-     ```
-
----
-
-# ⚡ Dicas Visuais
-
-* OIDs de **Device Info** → Strings (nome, IP, MAC, HTTP, SSID).
-* OIDs de **Sensor Data** → Integers (Temperatura e Umidade).
-* OIDs de **Monitoramento / Health** → Integers ou Counter64 (falhas, heap, RSSI, uptime).
+| Padrão | Significado | Ação |
+|--------|-------------|------|
+| Queda gradual | Possível memory leak | Reiniciar dispositivo |
